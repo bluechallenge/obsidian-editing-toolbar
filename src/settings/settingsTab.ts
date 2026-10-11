@@ -347,6 +347,13 @@ export class editingToolbarSettingTab extends PluginSettingTab {
   }
 
   private createDeclarativeGeneralPageDefinitions(): DeclarativeSettingsNode[] {
+    const hiddenToolbarWarning: DeclarativeSettingsNode[] = this.plugin.settings.cMenuVisibility
+      ? []
+      : [{
+        name: t('Toolbar Is Hidden'),
+        aliases: [t('Hide & Show')],
+        render: (setting: Setting) => this.renderHiddenToolbarWarning(setting),
+      }];
     return [
       {
         name: t('Editing Toolbar Append Method'),
@@ -373,6 +380,7 @@ export class editingToolbarSettingTab extends PluginSettingTab {
             this.refreshSettings();
           })),
       },
+      ...hiddenToolbarWarning,
       {
         name: t('Top Toolbar'),
         aliases: [t('Enable Top Toolbar')],
@@ -433,6 +441,29 @@ export class editingToolbarSettingTab extends PluginSettingTab {
         },
       },
     ];
+  }
+
+  /**
+   * The global Hide & Show switch (status bar / command palette) overrides the
+   * per-style toggles below, so surface it here when it is off.
+   */
+  private renderHiddenToolbarWarning(setting: Setting): void {
+    setting
+      .setName(t('Toolbar Is Hidden'))
+      .setDesc(t('Hide & Show is turned off, so the toolbars below will not appear until it is turned back on.'))
+      .addButton((button) => button
+        .setButtonText(t('Show Toolbar'))
+        .setCta()
+        .onClick(async () => {
+          this.plugin.settings.cMenuVisibility = true;
+          selfDestruct(this.plugin);
+          await this.plugin.saveSettings();
+          // Same path as the Hide/Show command: rebuild toolbars and refresh this tab.
+          window.setTimeout(() => {
+            dispatchEvent(new Event("editingToolbar-NewCommand"));
+          }, 100);
+        }));
+    setting.nameEl.setCssStyles({ color: 'var(--text-warning)' });
   }
 
   private renderDeclarativeToolbarToggle(
@@ -968,6 +999,9 @@ export class editingToolbarSettingTab extends PluginSettingTab {
           this.display();
         })
       );
+    if (!this.plugin.settings.cMenuVisibility) {
+      this.renderHiddenToolbarWarning(new Setting(generalSettingContainer));
+    }
 // Top toolbar toggle
     new Setting(generalSettingContainer)
       .setName(t('Top Toolbar'))

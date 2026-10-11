@@ -1,4 +1,4 @@
-import { Menu, setIcon, ToggleComponent, requireApiVersion, ItemView } from "obsidian";
+import { Menu, setIcon, ItemView, Setting, ExtraButtonComponent } from "obsidian";
 import { t } from "src/translations/helper";
 import type editingToolbarPlugin from "src/plugin/main";
 import { CommandPicker, openSlider } from "src/modals/suggesterModals";
@@ -7,9 +7,30 @@ import { setMenuVisibility } from "src/util/statusBarConstants";
 import { ViewUtils } from "src/util/viewUtils";
 import { AESTHETIC_STYLES } from "src/settings/settingsData";
 
+const TOOLBAR_TOGGLES = [
+  { style: "top", title: "Top Toolbar", key: "enableTopToolbar" },
+  { style: "following", title: "Following Toolbar", key: "enableFollowingToolbar" },
+  { style: "fixed", title: "Fixed Toolbar", key: "enableFixedToolbar" },
+] as const;
+
+// 默认允许显示工具栏的视图类型
+const DEFAULT_VIEW_TYPES = [
+  'markdown',
+  'canvas',
+  'thino_view',
+  'meld-encrypted-view',
+];
+
+/**
+ * Status bar button with a quick-settings panel.
+ * A panel rather than a Menu: Obsidian closes a menu (native or not) after every
+ * click, which made changing several toggles in a row tedious.
+ */
 export class StatusBar {
   private plugin: editingToolbarPlugin;
   private statusBarIcon: HTMLElement;
+  private panelEl: HTMLElement | null = null;
+  private panelCleanup: (() => void) | null = null;
 
   constructor(plugin: editingToolbarPlugin) {
     this.plugin = plugin;
@@ -19,353 +40,254 @@ export class StatusBar {
     this.statusBarIcon = this.plugin.addStatusBarItem();
     this.statusBarIcon.addClass("editingToolbar-statusbar-button");
     setIcon(this.statusBarIcon, "editingToolbar");
-    this.registerClickEvent();
-  }
-
-  private registerClickEvent(): void {
+    this.statusBarIcon.setAttr("data-tooltip-position", "top");
+    this.updateTooltip();
     this.plugin.registerDomEvent(this.statusBarIcon, "click", () => {
-      const statusBarRect = this.statusBarIcon.parentElement.getBoundingClientRect();
-      const statusBarIconRect = this.statusBarIcon.getBoundingClientRect();
-      this.showMenu(statusBarIconRect, statusBarRect);
+      if (this.panelEl) this.closePanel();
+      else this.openPanel();
     });
+    this.plugin.register(() => this.closePanel());
   }
 
-  private showMenu(iconRect: DOMRect, barRect: DOMRect): void {
-    const menu = new Menu();
-    
-    // 添加第一个部分
-    menu.addSections(["settings"]); // 使用 addSections 添加部分
-    this.addVisibilityToggle(menu);
-
-    this.addAestheticStyleToggle(menu);
-    menu.addSections(["viewType"]);
-    this.addViewTypeToggle(menu);
-    // 添加第二个部分
-    menu.addSections(["controls"]); // 使用 addSections 添加部分
-    this.addToolbarControls(menu);
-
-    const menuDom = (menu as unknown as { dom: HTMLElement }).dom;
-    menuDom.addClass("editingToolbar-statusbar-menu");
-
-    menu.showAtPosition({
-      x: iconRect.right + 5,
-      y: barRect.top - 5,
-    });
+  /**
+   * Called from saveSettings(): the state can change from settings, commands or
+   * this panel. Refreshing on hover is too late, as Obsidian reads the label on
+   * mouseover, which fires before mouseenter.
+   */
+  public updateTooltip(): void {
+    this.statusBarIcon?.setAttr("aria-label", this.getTooltip());
   }
 
-  private addVisibilityToggle(menu: Menu): void {
-    menu.addItem((item) => {
-      // 先设置所有属性
-      item.setTitle(t("Hide & Show"));
-      if (requireApiVersion("0.15.0")) {
-        item.setSection("settings");
-      }
-      const itemDom = (item as unknown as { dom: HTMLElement }).dom;
-      const toggleComponent = new ToggleComponent(itemDom)
-        .setValue(this.plugin.settings.cMenuVisibility)
-        .setDisabled(true);
-
-      const toggle = async () => {
-        this.plugin.settings.cMenuVisibility = !this.plugin.settings.cMenuVisibility;
-        toggleComponent.setValue(this.plugin.settings.cMenuVisibility);
-        this.plugin.settings.cMenuVisibility == true
-          ? window.setTimeout(() => {
-            dispatchEvent(new Event("editingToolbar-NewCommand"));
-          }, 100)
-          : setMenuVisibility(this.plugin.settings.cMenuVisibility);
-        selfDestruct(this.plugin);
-        await this.plugin.saveSettings();
-      };
-
-      item.onClick((e) => {
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        void toggle();
-      });
-    });
-
-    // 工具栏开关子菜单
-    menu.addItem((item) => {
-      item.setTitle(t("Toolbar Position"));
-      if (requireApiVersion("0.15.0")) {
-        item.setSection("settings");
-      }
-      item.setIcon("dock");
-
-      const submenu = item.setSubmenu();
-
-      // Top 工具栏开关
-      submenu.addItem((subItem) => {
-        subItem.setTitle(t("Top Toolbar"));
-        const itemDom = (subItem as unknown as { dom: HTMLElement }).dom;
-        const toggleComponent = new ToggleComponent(itemDom)
-          .setValue(this.plugin.settings.enableTopToolbar || false)
-          .setDisabled(true);
-
-        subItem.onClick(async (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          const s = this.plugin.settings;
-          const prevStyle = this.plugin.positionStyle;
-          s.enableTopToolbar = !s.enableTopToolbar;
-          toggleComponent.setValue(s.enableTopToolbar);
-          let nextStyle: string | null = null;
-          if (s.enableTopToolbar) {
-            nextStyle = 'top';
-          } else if (prevStyle === 'top') {
-            if (s.enableFollowingToolbar) nextStyle = 'following';
-            else if (s.enableFixedToolbar) nextStyle = 'fixed';
-            else nextStyle = null;
-          }
-          if (nextStyle && nextStyle !== prevStyle) {
-            this.plugin.onPositionStyleChange(nextStyle);
-          }
-          await this.plugin.saveSettings();
-          this.plugin.handleeditingToolbar();
-        });
-      });
-
-      // Following 工具栏开关
-      submenu.addItem((subItem) => {
-        subItem.setTitle(t("Following Toolbar"));
-        const itemDom = (subItem as unknown as { dom: HTMLElement }).dom;
-        const toggleComponent = new ToggleComponent(itemDom)
-          .setValue(this.plugin.settings.enableFollowingToolbar || false)
-          .setDisabled(true);
-
-        subItem.onClick(async (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          const s = this.plugin.settings;
-          const prevStyle = this.plugin.positionStyle;
-          s.enableFollowingToolbar = !s.enableFollowingToolbar;
-          toggleComponent.setValue(s.enableFollowingToolbar);
-          let nextStyle: string | null = null;
-          if (s.enableFollowingToolbar) {
-            nextStyle = 'following';
-          } else if (prevStyle === 'following') {
-            if (s.enableTopToolbar) nextStyle = 'top';
-            else if (s.enableFixedToolbar) nextStyle = 'fixed';
-            else nextStyle = null;
-          }
-          if (nextStyle && nextStyle !== prevStyle) {
-            this.plugin.onPositionStyleChange(nextStyle);
-          }
-          await this.plugin.saveSettings();
-          this.plugin.handleeditingToolbar();
-        });
-      });
-
-      // Fixed 工具栏开关
-      submenu.addItem((subItem) => {
-        subItem.setTitle(t("Fixed Toolbar"));
-        const itemDom = (subItem as unknown as { dom: HTMLElement }).dom;
-        const toggleComponent = new ToggleComponent(itemDom)
-          .setValue(this.plugin.settings.enableFixedToolbar || false)
-          .setDisabled(true);
-
-        subItem.onClick(async (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          const s = this.plugin.settings;
-          const prevStyle = this.plugin.positionStyle;
-          s.enableFixedToolbar = !s.enableFixedToolbar;
-          toggleComponent.setValue(s.enableFixedToolbar);
-          let nextStyle: string | null = null;
-          if (s.enableFixedToolbar) {
-            nextStyle = 'fixed';
-          } else if (prevStyle === 'fixed') {
-            if (s.enableTopToolbar) nextStyle = 'top';
-            else if (s.enableFollowingToolbar) nextStyle = 'following';
-            else nextStyle = null;
-          }
-          if (nextStyle && nextStyle !== prevStyle) {
-            this.plugin.onPositionStyleChange(nextStyle);
-          }
-          await this.plugin.saveSettings();
-          this.plugin.handleeditingToolbar();
-        });
-      });
-    });
+  /** Tooltip summarising the current state, so it is visible without opening the panel. */
+  private getTooltip(): string {
+    const s = this.plugin.settings;
+    if (!s.cMenuVisibility) {
+      return `${t("Editing Toolbar")}: ${t("Hidden")}`;
+    }
+    const enabled = TOOLBAR_TOGGLES.filter(({ key }) => s[key]).map(({ style, title }) =>
+      // Auto-hide only applies to the top toolbar and makes it fully transparent until hovered.
+      style === "top" && s.autohide ? `${t(title)} (${t("auto-hide")})` : t(title));
+    return `${t("Editing Toolbar")}: ${enabled.length ? enabled.join(", ") : t("No toolbar enabled")}`;
   }
 
-  // 添加视图类型显示控制
-  private addViewTypeToggle(menu: Menu): void {
-    // 获取当前视图类型
-    const view = this.plugin.app.workspace.getActiveViewOfType(ItemView);
-    if (!view) return;
-    
-    const viewType = view.getViewType();
-    
-    // 主菜单项：当前视图类型状态
-    menu.addItem((item) => {
-      item.setTitle(t("Current View: ") + viewType);
-      if (requireApiVersion("0.15.0")) {
-        item.setSection("settings");
-      }
-      item.setIcon("layout-template");
-      
-      // 使用子菜单来显示当前视图类型的显示/隐藏控制
-      const submenu = item.setSubmenu();
-      
-      // 检查当前视图类型是否在允许列表中
-      const isAllowed = ViewUtils.isAllowedViewType(view);
-      
-      // 为当前视图类型添加显示/隐藏控制
-      submenu.addItem(subItem => {
-        subItem.setTitle(isAllowed ? t("Disable toolbar for this view") : t("Enable toolbar for this view"));
-        subItem.setIcon(isAllowed ? "eye-off" : "eye");
-        subItem.onClick(async () => {
-          // 更新设置
-          if (!this.plugin.settings.viewTypeSettings) {
-            this.plugin.settings.viewTypeSettings = {};
-          }
-          
-          // 切换当前视图类型的状态
-          this.plugin.settings.viewTypeSettings[viewType] = !isAllowed;
-          
-          // 保存设置
-          await this.plugin.saveSettings();
+  private openPanel(): void {
+    const doc = this.statusBarIcon.doc;
+    const win = this.statusBarIcon.win;
+    const panel = this.panelEl = doc.body.createDiv({ cls: "editingToolbar-quick-settings" });
+    this.statusBarIcon.addClass("is-active");
 
-          // 刷新工具栏
+    // Anchor above the status bar, right-aligned with the button.
+    const iconRect = this.statusBarIcon.getBoundingClientRect();
+    const barRect = (this.statusBarIcon.parentElement ?? this.statusBarIcon).getBoundingClientRect();
+    panel.setCssStyles({
+      right: `${Math.max(8, win.innerWidth - iconRect.right)}px`,
+      bottom: `${win.innerHeight - barRect.top + 6}px`,
+    });
+
+    this.renderPanel();
+
+    const onMouseDown = (e: MouseEvent) => {
+      const target = e.target as Node;
+      // Clicks on the button toggle via its own handler; menus opened from the panel live outside it.
+      if (panel.contains(target) || this.statusBarIcon.contains(target)) return;
+      if (target.instanceOf(HTMLElement) && target.closest(".menu")) return;
+      this.closePanel();
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") this.closePanel();
+    };
+    doc.addEventListener("mousedown", onMouseDown, true);
+    doc.addEventListener("keydown", onKeyDown, true);
+    this.panelCleanup = () => {
+      doc.removeEventListener("mousedown", onMouseDown, true);
+      doc.removeEventListener("keydown", onKeyDown, true);
+    };
+  }
+
+  private closePanel(): void {
+    this.panelCleanup?.();
+    this.panelCleanup = null;
+    this.panelEl?.remove();
+    this.panelEl = null;
+    this.statusBarIcon?.removeClass("is-active");
+  }
+
+  /** Re-render after each change so dependent rows (auto-hide, view state) stay in sync. */
+  private renderPanel(): void {
+    const panel = this.panelEl;
+    if (!panel) return;
+    panel.empty();
+    const s = this.plugin.settings;
+
+    const header = panel.createDiv({ cls: "editingToolbar-quick-settings-header" });
+    header.createSpan({ text: t("Editing Toolbar") });
+    new ExtraButtonComponent(header)
+      .setIcon("settings")
+      .setTooltip(t("Settings"))
+      .onClick(() => {
+        this.closePanel();
+        this.plugin.app.setting.open();
+        this.plugin.app.setting.openTabById("editing-toolbar");
+      });
+
+    // 显示 / 隐藏
+    const visibilitySection = this.createSection(panel);
+    new Setting(visibilitySection)
+      .setName(t("Show Toolbar"))
+      .addToggle((toggle) => toggle
+        .setValue(s.cMenuVisibility)
+        .onChange(async (value) => {
+          s.cMenuVisibility = value;
+          value
+            ? window.setTimeout(() => {
+              dispatchEvent(new Event("editingToolbar-NewCommand"));
+            }, 100)
+            : setMenuVisibility(value);
+          selfDestruct(this.plugin);
+          await this.plugin.saveSettings();
+          this.renderPanel();
+        }));
+
+    // 工具栏开关
+    const toolbarSection = this.createSection(panel);
+    toolbarSection.toggleClass("is-muted", !s.cMenuVisibility);
+    TOOLBAR_TOGGLES.forEach(({ style, title, key }) => {
+      new Setting(toolbarSection)
+        .setName(t(title))
+        .addToggle((toggle) => toggle
+          .setValue(s[key] || false)
+          .onChange(async (value) => {
+            const prevStyle = this.plugin.positionStyle;
+            s[key] = value;
+            let nextStyle: string | null = null;
+            if (value) {
+              nextStyle = style;
+            } else if (prevStyle === style) {
+              nextStyle = TOOLBAR_TOGGLES.find((other) => s[other.key])?.style ?? null;
+            }
+            if (nextStyle && nextStyle !== prevStyle) {
+              this.plugin.onPositionStyleChange(nextStyle);
+            }
+            await this.plugin.saveSettings();
+            this.plugin.handleeditingToolbar();
+            this.renderPanel();
+          }));
+
+      if (style === "top" && s.enableTopToolbar) {
+        new Setting(toolbarSection)
+          .setName(t("Auto-hide"))
+          .setClass("editingToolbar-quick-settings-sub")
+          .addToggle((toggle) => toggle
+            .setValue(s.autohide)
+            .onChange(async (value) => {
+              s.autohide = value;
+              await this.plugin.saveSettings();
+              window.setTimeout(() => {
+                dispatchEvent(new Event("editingToolbar-NewCommand"));
+              }, 100);
+            }));
+      }
+    });
+
+    // 外观样式
+    const appearanceSection = this.createSection(panel);
+    new Setting(appearanceSection)
+      .setName(t("Appearance Style"))
+      .addDropdown((dropdown) => dropdown
+        .addOptions(Object.fromEntries(AESTHETIC_STYLES.map((style) => [style, style])))
+        .setValue(s.aestheticStyle)
+        .onChange(async (value) => {
+          s.aestheticStyle = value;
+          await this.plugin.saveSettings();
           selfDestruct(this.plugin);
           window.setTimeout(() => {
             dispatchEvent(new Event("editingToolbar-NewCommand"));
           }, 100);
-        });
-      });
-      
-      // 添加管理所有视图类型的子菜单
-      submenu.addItem(subItem => {
-        subItem.setTitle(t("Manage all view types"));
-        subItem.setIcon("settings-2");
-        
-        // 进一步的子菜单用于管理所有视图类型
-        const allViewsSubmenu = subItem.setSubmenu();
-        
-        // 获取默认允许的视图类型
-        const defaultViewTypes = [
-          'markdown',
-          'canvas',
-          'thino_view',
-          'meld-encrypted-view',
-        ];
-        
-        // 添加所有当前已知的视图类型
-        const knownViewTypes = new Set([
-          ...defaultViewTypes,
-          ...Object.keys(this.plugin.settings.viewTypeSettings || {})
-        ]);
-        
-        // 为每个视图类型添加一个菜单项
-        Array.from(knownViewTypes).sort().forEach(vType => {
-          // 检查该视图类型的当前状态
-          const isViewAllowed = this.isViewTypeAllowed(vType);
-          
-          allViewsSubmenu.addItem(viewItem => {
-            viewItem.setTitle(vType);
-            viewItem.setIcon(isViewAllowed ? "check" : "");
-            viewItem.onClick(async () => {
-              // 更新设置
-              if (!this.plugin.settings.viewTypeSettings) {
-                this.plugin.settings.viewTypeSettings = {};
-              }
-              
-              // 切换状态
-              this.plugin.settings.viewTypeSettings[vType] = !isViewAllowed;
+        }));
 
-              // 如果当前视图就是这个类型，则刷新工具栏
-              if (viewType === vType) {
-                selfDestruct(this.plugin);
-                window.setTimeout(() => {
-                  dispatchEvent(new Event("editingToolbar-NewCommand"));
-                }, 100);
-              }
-              
-              // 保存设置
-              await this.plugin.saveSettings();
-            });
-          });
-        });
-      });
-    });
-  }
-
-  // 检查视图类型是否允许显示工具栏
-  private isViewTypeAllowed(viewType: string): boolean {
-    // 如果没有专门的设置，使用默认值
-    if (!this.plugin.settings.viewTypeSettings || 
-        this.plugin.settings.viewTypeSettings[viewType] === undefined) {
-      // 默认允许的视图类型
-      const defaultViewTypes = [
-        'markdown',
-        'canvas',
-        'thino_view',
-        'meld-encrypted-view',
-      ];
-      return defaultViewTypes.includes(viewType);
-    }
-    
-    // 使用用户设置的值
-    return this.plugin.settings.viewTypeSettings[viewType];
-  }
-
-  private addToolbarControls(menu: Menu): void {
-    const controls = [
-      {
-        icon: "plus",
-        title: t("Add Command"),
-        click: () => new CommandPicker(this.plugin).open()
-      }
-    ];
-
-    // 只在 positionStyle 为 "fixed" 时添加 sliders 选项
-    if (this.plugin.positionStyle === "fixed") {
-      controls.push({
-        icon: "file-sliders",
-        title: t("Position Settings"),
-        click: () => new openSlider(this.plugin.app, this.plugin).open()
-      });
-    }
-
-    controls.forEach(control => {
-      menu.addItem((item) => {
-        // 分别设置每个属性
-        item.setIcon(control.icon);
-        item.setTitle(control.title);
-        item.onClick(control.click);
-
-        if (requireApiVersion("0.15.0")) {
-          item.setSection("controls");
-        }
-      });
-    });
-  }
-
-  private addAestheticStyleToggle(menu: Menu): void {
-    menu.addItem((item) => {
-      item.setTitle(t("Appearance Style"));
-      if (requireApiVersion("0.15.0")) {
-        item.setSection("settings");
-      }
-      item.setIcon("cherry");
-
-      const submenu = item.setSubmenu();
-      
-      AESTHETIC_STYLES.forEach(style => {
-        submenu.addItem(subItem => {
-          subItem.setTitle(style);
-          subItem.setIcon(this.plugin.settings.aestheticStyle === style ? "check" : "");
-          subItem.onClick(async () => {
-            this.plugin.settings.aestheticStyle = style;
+    // 当前视图
+    const view = this.plugin.app.workspace.getActiveViewOfType(ItemView);
+    if (view) {
+      const viewType = view.getViewType();
+      const viewSection = this.createSection(panel);
+      new Setting(viewSection)
+        .setName(t("Current View: ") + viewType)
+        .addExtraButton((button) => button
+          .setIcon("settings-2")
+          .setTooltip(t("Manage all view types"))
+          .onClick(() => this.showViewTypesMenu(button.extraSettingsEl, viewType)))
+        .addToggle((toggle) => toggle
+          .setValue(ViewUtils.isAllowedViewType(view))
+          .onChange(async (value) => {
+            if (!s.viewTypeSettings) s.viewTypeSettings = {};
+            s.viewTypeSettings[viewType] = value;
             await this.plugin.saveSettings();
             selfDestruct(this.plugin);
             window.setTimeout(() => {
               dispatchEvent(new Event("editingToolbar-NewCommand"));
             }, 100);
-          });
-        });
-      });
-    });
+          }));
+    }
+
+    // 操作
+    const controlsSection = this.createSection(panel);
+    const controls = new Setting(controlsSection).setClass("editingToolbar-quick-settings-controls");
+    controls.addButton((button) => button
+      .setIcon("plus")
+      .setButtonText(t("Add Command"))
+      .onClick(() => {
+        this.closePanel();
+        new CommandPicker(this.plugin).open();
+      }));
+    if (s.enableFixedToolbar || this.plugin.positionStyle === "fixed") {
+      controls.addButton((button) => button
+        .setIcon("file-sliders")
+        .setButtonText(t("Position Settings"))
+        .onClick(() => {
+          this.closePanel();
+          new openSlider(this.plugin.app, this.plugin).open();
+        }));
+    }
   }
-} 
+
+  private createSection(panel: HTMLElement): HTMLElement {
+    return panel.createDiv({ cls: "editingToolbar-quick-settings-section" });
+  }
+
+  private showViewTypesMenu(anchorEl: HTMLElement, currentViewType: string): void {
+    const s = this.plugin.settings;
+    const knownViewTypes = new Set([
+      ...DEFAULT_VIEW_TYPES,
+      ...Object.keys(s.viewTypeSettings || {}),
+    ]);
+    const menu = new Menu();
+    Array.from(knownViewTypes).sort().forEach((vType) => {
+      const isViewAllowed = this.isViewTypeAllowed(vType);
+      menu.addItem((item) => item
+        .setTitle(vType)
+        .setChecked(isViewAllowed)
+        .onClick(async () => {
+          if (!s.viewTypeSettings) s.viewTypeSettings = {};
+          s.viewTypeSettings[vType] = !isViewAllowed;
+          // 如果当前视图就是这个类型，则刷新工具栏
+          if (vType === currentViewType) {
+            selfDestruct(this.plugin);
+            window.setTimeout(() => {
+              dispatchEvent(new Event("editingToolbar-NewCommand"));
+            }, 100);
+          }
+          await this.plugin.saveSettings();
+          this.renderPanel();
+        }));
+    });
+    const rect = anchorEl.getBoundingClientRect();
+    menu.showAtPosition({ x: rect.left, y: rect.bottom });
+  }
+
+  // 检查视图类型是否允许显示工具栏
+  private isViewTypeAllowed(viewType: string): boolean {
+    const setting = this.plugin.settings.viewTypeSettings?.[viewType];
+    // 如果没有专门的设置，使用默认值
+    return setting === undefined ? DEFAULT_VIEW_TYPES.includes(viewType) : setting;
+  }
+}

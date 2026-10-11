@@ -2833,3 +2833,54 @@ body.auto-hide-header .workspace-tab-header-container + .workspace-tab-container
 .editing-toolbar-update-modal .changelog-content a {
   text-decoration: underline;
 }
+
+/* Status bar quick-settings panel */
+.editingToolbar-quick-settings {
+  position: fixed;
+  z-index: var(--layer-menu);
+  width: 280px;
+  max-height: 70vh;
+  overflow-y: auto;
+  padding: 4px 12px 8px;
+  background-color: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  box-shadow: var(--shadow-s);
+  font-size: var(--font-ui-small);
+}
+.editingToolbar-quick-settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 0;
+  font-weight: var(--font-semibold);
+  color: var(--text-normal);
+}
+.editingToolbar-quick-settings-section {
+  border-top: 1px solid var(--background-modifier-border);
+  padding: 2px 0;
+}
+.editingToolbar-quick-settings-section.is-muted {
+  opacity: 0.5;
+}
+.editingToolbar-quick-settings .setting-item {
+  padding: 6px 0;
+  border-top: none;
+}
+.editingToolbar-quick-settings .setting-item-name {
+  font-size: var(--font-ui-small);
+}
+.editingToolbar-quick-settings .setting-item-info:empty {
+  display: none;
+}
+.editingToolbar-quick-settings-sub .setting-item-name {
+  padding-left: 16px;
+  color: var(--text-muted);
+}
+.editingToolbar-quick-settings-controls .setting-item-control {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+}
+.editingToolbar-statusbar-button.is-active {
+  background-color: var(--background-modifier-hover);
+}

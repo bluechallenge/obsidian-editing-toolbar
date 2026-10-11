@@ -340,6 +340,11 @@ declare module "obsidian" {
 		 */
 		setActive(active: boolean): this;
 		/**
+		 * Show a checkmark next to the item. Unlike custom DOM inside the item,
+		 * this also renders in native (macOS) menus.
+		 */
+		setChecked(checked: boolean | null): this;
+		/**
 		 * Create a submenu on the menu item
 		 *
 		 * @tutorial Creates the foldable menus with more options as seen when you right-click in the editor (e.g. "Insert", "Format", ...)

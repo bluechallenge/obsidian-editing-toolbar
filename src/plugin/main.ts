@@ -1113,6 +1113,7 @@ updateCurrentCommands(commands: Command[], style?: string): void {
 
   async saveSettings() {
     this.syncAIToolbarCommandVisibility();
+    this.statusBar?.updateTooltip();
     await this.saveData(this.settings);
   }
 
